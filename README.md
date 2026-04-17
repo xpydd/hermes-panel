@@ -7,9 +7,9 @@
 [![Vitest](https://img.shields.io/badge/Vitest-3-6E9F18?logo=vitest)](https://vitest.dev/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-D22128?logo=apache)](https://www.apache.org/licenses/LICENSE-2.0)
 
-一个基于 **Tauri v2** 的 Hermes Agent 桌面管理工具，目标不是做宣传页，而是把 Hermes 的本地运维动作集中到一个可用的桌面控制台里。
+一个基于 **Tauri v2** 的 Hermes Agent 桌面管理工具，把 Hermes 的本地运维动作集中到一个可用的桌面控制台里。
 
-**目标用户**：使用 Hermes Agent 的开发者及运维人员
+**目标用户**：使用 Hermes Agent 的所有人员。
 
 **技术栈**：
 - **框架**：Tauri v2 — 使用 Rust 构建极简二进制体积，实现原生跨平台体验
@@ -58,10 +58,12 @@ npx playwright test
 ## 打包
 
 ```bash
-npm run tauri build -- --debug
-```
+# 构建当前架构的安装包 (默认已开启 dmg)
+npm run tauri build
 
-当前 `bundle.targets` 默认只打 macOS `.app`，先避开开发阶段的 DMG 失败问题；需要 DMG 时再显式指定对应 target。
+# 构建 Intel 芯片 (x86_64) 的 DMG
+npm run tauri build -- --target x86_64-apple-darwin
+```
 
 ## 说明
 
