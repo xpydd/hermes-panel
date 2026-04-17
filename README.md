@@ -5,6 +5,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite)](https://vite.dev/)
 [![Vitest](https://img.shields.io/badge/Vitest-3-6E9F18?logo=vitest)](https://vitest.dev/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-D22128?logo=apache)](https://www.apache.org/licenses/LICENSE-2.0)
 
 一个基于 **Tauri v2** 的 Hermes Agent 桌面管理工具，目标不是做宣传页，而是把 Hermes 的本地运维动作集中到一个可用的桌面控制台里。
 
@@ -67,3 +68,7 @@ npm run tauri build -- --debug
 - 交互式命令仍然在系统终端中执行，避免桌面 UI 去硬接管 Hermes CLI 的交互流程。
 - 配置备份和命令历史保存在 `~/.hermes-panel/`。
 - 会话消息历史来自 Hermes 自身的 `state.db / sessions` 数据，而不是应用自己再维护一份副本。
+
+## 开源协议
+
+本项目基于 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) 开源。
