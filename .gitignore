@@ -1,0 +1,65 @@
+# IDE / Editor / System
+.vscode/
+.idea/
+.claude/
+.DS_Store
+*.swp
+*.swo
+*.bak
+*~
+.history/
+.undo/
+Thumbs.db
+.Spotlight-V100
+.Trashes
+Product-Spec.md
+Product-Spec-CHANGELOG.md
+release/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Node.js
+node_modules/
+dist/
+dist-ssr/
+out/
+*.local
+.vite/
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+# Note: For apps, it's generally recommended to commit Cargo.lock to ensure reproducible builds.
+# If you decide to commit it later, remove the line below.
+src-tauri/Cargo.lock
+# Rust intermediate files
+*.rlib
+*.rmeta
+*.d
+
+# Test / Playwright / Coverage
+__tests__/
+*.test.*
+*.spec.*
+coverage/
+.nyc_output/
+*.lcov
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+.playwright-cli/
+*.snapshot.png
+*.diff.png

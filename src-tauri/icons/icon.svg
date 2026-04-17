@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="surface" x1="18%" x2="82%" y1="14%" y2="88%">
+      <stop offset="0%" stop-color="#fef4e5" />
+      <stop offset="100%" stop-color="#edd7be" />
+    </linearGradient>
+    <linearGradient id="left" x1="24%" x2="84%" y1="18%" y2="88%">
+      <stop offset="0%" stop-color="#ffb671" />
+      <stop offset="100%" stop-color="#dd6128" />
+    </linearGradient>
+    <linearGradient id="right" x1="22%" x2="82%" y1="18%" y2="86%">
+      <stop offset="0%" stop-color="#4db8a6" />
+      <stop offset="100%" stop-color="#0c6f7c" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="#132028" />
+  <rect x="12" y="12" width="104" height="104" rx="24" fill="url(#surface)" />
+  <path
+    d="M28 26h28L44 46v34l12 22H28l8-22V46z"
+    fill="url(#left)"
+  />
+  <path
+    d="M100 26H72l12 20v34l-12 22h28l-8-22V46z"
+    fill="url(#right)"
+  />
+  <path
+    d="M48 52l14 14-14 14"
+    fill="none"
+    stroke="#fff8ec"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="8"
+  />
+  <rect x="72" y="48" width="10" height="36" rx="5" fill="#fff8ec" />
+</svg>

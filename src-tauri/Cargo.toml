@@ -1,0 +1,20 @@
+[package]
+name = "hermes-panel"
+version = "0.1.0"
+edition = "2021"
+description = "Hermes Agent desktop panel built with Tauri v2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", features = ["clock"] }
+dirs = "6"
+open = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tauri = { version = "2", features = ["tray-icon"] }
+
+[features]
+default = []

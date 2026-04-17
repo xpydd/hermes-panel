@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hermes Panel",
+  "version": "0.1.0",
+  "identifier": "cool.qt.hermespanel",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hermes Panel",
+        "width": 800,
+        "height": 630,
+        "minWidth": 800,
+        "minHeight": 630,
+        "maxWidth": 800,
+        "maxHeight": 630,
+        "center": true,
+        "decorations": true,
+        "resizable": false,
+        "minimizable": true,
+        "closable": true,
+        "maximizable": false,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
