@@ -1865,7 +1865,7 @@ fn fetch_latest_official_release() -> Result<GithubLatestRelease, String> {
             "-H",
             "Accept: application/vnd.github+json",
             "-H",
-            "User-Agent: Hermes-Panel/0.1.0",
+            "User-Agent: Hermes-Panel/0.1.1",
             "https://api.github.com/repos/NousResearch/hermes-agent/releases/latest",
         ])
         .output()

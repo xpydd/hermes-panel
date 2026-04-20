@@ -4,7 +4,7 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
 !define APP_NAME "Hermes Panel"
-!define APP_VERSION "0.1.0"
+!define APP_VERSION "0.1.1"
 !define APP_PUBLISHER "qt.cool"
 !define APP_EXE "Hermes Panel.exe"
 !define APP_DLL "WebView2Loader.dll"

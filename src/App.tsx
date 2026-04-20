@@ -72,7 +72,7 @@ const EMPTY_SNAPSHOT: AppStateSnapshot = {
   },
   recentIssues: [],
   about: {
-    appVersion: "0.1.0",
+    appVersion: "0.1.1",
     platform: "",
     arch: "",
     hermesPath: "",
