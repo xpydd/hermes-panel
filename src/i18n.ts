@@ -10,6 +10,7 @@ type Copy = {
   status: string;
   repair: string;
   models: string;
+  channels: string;
   history: string;
   profiles: string;
   settings: string;
@@ -65,6 +66,11 @@ type Copy = {
   exportPath: string;
   archivePath: string;
   linkedModel: string;
+  messagingWorkingDir: string;
+  groupSessionsPerUser: string;
+  discordRequireMention: string;
+  discordAutoThread: string;
+  discordFreeResponseChannels: string;
   modelName: string;
   providerType: string;
   apiKey: string;
@@ -95,6 +101,7 @@ const zhCN: Copy = {
     status: "状态检测",
     repair: "异常修复",
     models: "模型配置",
+    channels: "消息渠道",
     history: "会话历史",
     profiles: "配置身份",
     settings: "软件设置"
@@ -105,6 +112,7 @@ const zhCN: Copy = {
   status: "状态检测",
   repair: "异常修复",
   models: "模型配置",
+  channels: "消息渠道",
   history: "会话历史",
   profiles: "配置身份",
   settings: "软件设置",
@@ -160,6 +168,11 @@ const zhCN: Copy = {
   exportPath: "导出路径",
   archivePath: "归档路径",
   linkedModel: "绑定模型",
+  messagingWorkingDir: "消息工作目录",
+  groupSessionsPerUser: "群聊按用户分会话",
+  discordRequireMention: "Discord 仅在被提及时响应",
+  discordAutoThread: "Discord 自动创建线程",
+  discordFreeResponseChannels: "Discord 自由响应频道",
   modelName: "名称",
   providerType: "Provider 类型",
   apiKey: "API Key",
@@ -190,6 +203,7 @@ const enUS: Copy = {
     status: "Health",
     repair: "Repair",
     models: "Models",
+    channels: "Channels",
     history: "History",
     profiles: "Profiles",
     settings: "Settings"
@@ -200,6 +214,7 @@ const enUS: Copy = {
   status: "Health",
   repair: "Repair",
   models: "Models",
+  channels: "Channels",
   history: "History",
   profiles: "Profiles",
   settings: "Settings",
@@ -255,6 +270,11 @@ const enUS: Copy = {
   exportPath: "Export Path",
   archivePath: "Archive Path",
   linkedModel: "Linked Model",
+  messagingWorkingDir: "Messaging Working Directory",
+  groupSessionsPerUser: "Group Sessions Per User",
+  discordRequireMention: "Discord Requires Mention",
+  discordAutoThread: "Discord Auto Thread",
+  discordFreeResponseChannels: "Discord Free Response Channels",
   modelName: "Name",
   providerType: "Provider",
   apiKey: "API Key",

@@ -86,6 +86,10 @@ struct HermesBasicSettings {
     openai_api_key: String,
     openai_base_url: String,
     messaging_cwd: String,
+    messaging_group_sessions_per_user: bool,
+    discord_require_mention: bool,
+    discord_auto_thread: bool,
+    discord_free_response_channels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1395,6 +1399,28 @@ fn extract_basic_settings(
         openai_api_key: env_map.get("OPENAI_API_KEY").cloned().unwrap_or_default(),
         openai_base_url: env_map.get("OPENAI_BASE_URL").cloned().unwrap_or_default(),
         messaging_cwd: env_map.get("MESSAGING_CWD").cloned().unwrap_or_default(),
+        messaging_group_sessions_per_user: yaml_bool(&root, &["messaging", "group_sessions_per_user"])
+            .unwrap_or(false),
+        discord_require_mention: yaml_bool(
+            &root,
+            &["messaging", "providers", "discord", "require_mention"],
+        )
+        .unwrap_or(false),
+        discord_auto_thread: yaml_bool(
+            &root,
+            &["messaging", "providers", "discord", "auto_thread"],
+        )
+        .unwrap_or(false),
+        discord_free_response_channels: yaml_string_list(
+            &root,
+            &[
+                "messaging",
+                "providers",
+                "discord",
+                "free_response_channels",
+            ],
+        )
+        .unwrap_or_default(),
     })
 }
 
@@ -1404,6 +1430,16 @@ fn yaml_string(root: &Value, path: &[&str]) -> Option<String> {
 
 fn yaml_bool(root: &Value, path: &[&str]) -> Option<bool> {
     yaml_at(root, path).and_then(Value::as_bool)
+}
+
+fn yaml_string_list(root: &Value, path: &[&str]) -> Option<Vec<String>> {
+    let items = yaml_at(root, path)?.as_sequence()?;
+    Some(
+        items
+            .iter()
+            .filter_map(|value| value.as_str().map(ToString::to_string))
+            .collect(),
+    )
 }
 
 fn yaml_at<'a>(root: &'a Value, path: &[&str]) -> Option<&'a Value> {
@@ -1428,6 +1464,31 @@ fn update_yaml_string(root: &mut Value, path: &[&str], value: &str) {
     }
 
     set_yaml_path(root, path, Value::String(value.trim().to_string()));
+}
+
+fn update_yaml_bool(root: &mut Value, path: &[&str], value: bool) {
+    set_yaml_path(root, path, Value::Bool(value));
+}
+
+fn update_yaml_string_list(root: &mut Value, path: &[&str], values: &[String]) {
+    let filtered = values
+        .iter()
+        .filter_map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(Value::String(trimmed.to_string()))
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if filtered.is_empty() {
+        remove_yaml_path(root, path);
+        return;
+    }
+
+    set_yaml_path(root, path, Value::Sequence(filtered));
 }
 
 fn set_yaml_path(root: &mut Value, path: &[&str], new_value: Value) {
@@ -1645,6 +1706,7 @@ fn main() {
             panel_v1::load_status_page,
             panel_v1::load_repair_page,
             panel_v1::load_models_page,
+            panel_v1::load_messaging_page,
             panel_v1::load_profiles_page,
             panel_v1::load_history_page,
             panel_v1::check_official_update,
@@ -1654,6 +1716,7 @@ fn main() {
             panel_v1::save_model_config,
             panel_v1::activate_model_config,
             panel_v1::delete_model_config,
+            panel_v1::save_messaging_settings,
             panel_v1::save_panel_settings,
             panel_v1::save_profile_model_binding,
             panel_v1::create_identity,
@@ -1729,5 +1792,55 @@ MESSAGING_CWD=/tmp/messages
         assert_eq!(basic.openai_api_key, "oa-key");
         assert_eq!(basic.openai_base_url, "https://example.com/v1");
         assert_eq!(basic.messaging_cwd, "/tmp/messages");
+    }
+
+    #[test]
+    fn extract_basic_settings_reads_messaging_channel_values() {
+        let config = r#"
+messaging:
+  group_sessions_per_user: true
+  providers:
+    discord:
+      require_mention: true
+      auto_thread: false
+      free_response_channels:
+        - general
+        - ops-room
+"#;
+        let env_text = r#"
+MESSAGING_CWD=/srv/hermes/im
+"#;
+
+        let basic = extract_basic_settings(config, env_text).expect("basic settings");
+
+        assert_eq!(basic.messaging_cwd, "/srv/hermes/im");
+        assert!(basic.messaging_group_sessions_per_user);
+        assert!(basic.discord_require_mention);
+        assert!(!basic.discord_auto_thread);
+        assert_eq!(
+            basic.discord_free_response_channels,
+            vec!["general".to_string(), "ops-room".to_string()]
+        );
+    }
+
+    #[test]
+    fn env_map_to_string_keeps_messaging_env_near_top() {
+        let mut env_map = BTreeMap::new();
+        env_map.insert("MESSAGING_CWD".to_string(), "/srv/hermes/im".to_string());
+        env_map.insert("CUSTOM_FLAG".to_string(), "enabled".to_string());
+
+        let rendered = env_map_to_string(&env_map);
+
+        assert!(rendered.contains("MESSAGING_CWD=/srv/hermes/im"));
+        assert!(
+            rendered
+                .lines()
+                .position(|line| line == "MESSAGING_CWD=/srv/hermes/im")
+                .expect("messaging cwd line")
+                < rendered
+                    .lines()
+                    .position(|line| line == "CUSTOM_FLAG=enabled")
+                    .expect("custom line")
+        );
     }
 }

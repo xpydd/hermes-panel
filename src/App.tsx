@@ -9,6 +9,14 @@ import {
   useState
 } from "react";
 import { getCopy } from "./i18n";
+import {
+  overviewDiagnosisLabel,
+  PRIMARY_PAGE_ORDER,
+  resolveStartupGate,
+  startupPageForTarget,
+  type StartupGateDecision,
+  type StartupPageId
+} from "./shell";
 import { filterSessionsByQuery } from "./state/sessionFilter";
 import { mergeShellSnapshotData } from "./state/shellSnapshot";
 import panelIcon from "../src-tauri/icons/icon.svg";
@@ -18,6 +26,8 @@ import type {
   IdentitySummary,
   IssueItem,
   LocaleCode,
+  MessagingPageSnapshot,
+  MessagingSettingsInput,
   ModelConfig,
   ModelConfigInput,
   OfficialUpdateSnapshot,
@@ -38,18 +48,7 @@ import type {
 const DEFAULT_LOCALE: LocaleCode = "zh-CN";
 const POLL_INTERVAL_MS = 900;
 
-const PAGE_ORDER: PageId[] = [
-  "overview",
-  "install",
-  "status",
-  "repair",
-  "models",
-  "history",
-  "profiles",
-  "settings"
-];
-
-type LazyPageId = "status" | "repair" | "models" | "history" | "profiles";
+type LazyPageId = "status" | "repair" | "models" | "channels" | "history" | "profiles";
 
 const EMPTY_SNAPSHOT: AppStateSnapshot = {
   generatedAt: "",
@@ -91,6 +90,14 @@ const BLANK_MODEL: ModelConfigInput = {
   baseUrl: ""
 };
 
+const EMPTY_MESSAGING_SETTINGS: MessagingSettingsInput = {
+  messagingCwd: "",
+  groupSessionsPerUser: false,
+  discordRequireMention: false,
+  discordAutoThread: false,
+  discordFreeResponseChannels: []
+};
+
 const EMPTY_MODEL_CONFIGS: ModelConfig[] = [];
 const EMPTY_IDENTITIES: IdentitySummary[] = [];
 const EMPTY_SESSIONS: SessionSummary[] = [];
@@ -102,6 +109,7 @@ const PAGE_TIMEOUT_MS: Record<LazyPageId, number> = {
   status: 2600,
   repair: 2600,
   models: 1800,
+  channels: 1800,
   history: 3000,
   profiles: 2600
 };
@@ -111,6 +119,7 @@ function isLazyPage(page: PageId): page is LazyPageId {
     page === "status" ||
     page === "repair" ||
     page === "models" ||
+    page === "channels" ||
     page === "history" ||
     page === "profiles"
   );
@@ -134,16 +143,26 @@ function App() {
   const [statusPage, setStatusPage] = useState<StatusPageSnapshot | null>(null);
   const [repairPage, setRepairPage] = useState<RepairPageSnapshot | null>(null);
   const [modelsPage, setModelsPage] = useState<ModelsPageSnapshot | null>(null);
+  const [messagingPage, setMessagingPage] = useState<MessagingPageSnapshot | null>(null);
   const [historyPage, setHistoryPage] = useState<HistoryPageSnapshot | null>(null);
   const [profilesPage, setProfilesPage] = useState<ProfilesPageSnapshot | null>(null);
   const [officialUpdate, setOfficialUpdate] = useState<OfficialUpdateSnapshot | null>(null);
   const [pageLoading, setPageLoading] = useState<Partial<Record<PageId, boolean>>>({});
   const [pageErrors, setPageErrors] = useState<Partial<Record<PageId, string>>>({});
   const [checkingOfficialUpdate, setCheckingOfficialUpdate] = useState(false);
+  const [startupReady, setStartupReady] = useState(false);
+  const [startupChecking, setStartupChecking] = useState(true);
+  const [startupPage, setStartupPage] = useState<StartupPageId>("status");
+  const startupBootstrappedRef = useRef(false);
+  const startupPageAutoModeRef = useRef(true);
 
   const [selectedModelId, setSelectedModelId] = useState("");
   const [modelDraft, setModelDraft] = useState<ModelConfigInput>(BLANK_MODEL);
   const [revealApiKey, setRevealApiKey] = useState(false);
+  const [messagingDraft, setMessagingDraft] = useState<MessagingSettingsInput>(
+    EMPTY_MESSAGING_SETTINGS
+  );
+  const [messagingChannelsText, setMessagingChannelsText] = useState("");
 
   const [selectedIdentity, setSelectedIdentity] = useState("");
   const [newIdentityName, setNewIdentityName] = useState("");
@@ -312,6 +331,7 @@ function App() {
       (page === "status" && statusPage !== null) ||
       (page === "repair" && repairPage !== null) ||
       (page === "models" && modelsPage !== null) ||
+      (page === "channels" && messagingPage !== null) ||
       (page === "history" && historyPage !== null) ||
       (page === "profiles" && profilesPage !== null);
 
@@ -378,6 +398,16 @@ function App() {
                 }
               }));
             }
+            break;
+          }
+          case "channels": {
+            const next = await invokeWithTimeout<MessagingPageSnapshot>(
+              "load_messaging_page",
+              {},
+              PAGE_TIMEOUT_MS.channels,
+              locale === "en-US" ? "Messaging settings loading timed out." : "消息渠道配置加载超时。"
+            );
+            setMessagingPage(next);
             break;
           }
           case "history": {
@@ -451,7 +481,7 @@ function App() {
     }
   });
 
-  const runTask = useEffectEvent(async (request: StartTaskRequest) => {
+  const executeTask = useEffectEvent(async (request: StartTaskRequest) => {
     setBusyKey(request.taskType);
     setError("");
 
@@ -466,16 +496,25 @@ function App() {
 
       if (finished.status === "failed") {
         setError(finished.summary || "Task failed");
-        return;
+        return finished;
       }
 
       if (finished.summary) {
         setToast(finished.summary);
       }
+      return finished;
     } catch (nextError) {
       setError(normalizeError(nextError));
+      return null;
     } finally {
       setBusyKey("");
+    }
+  });
+
+  const runTask = useEffectEvent(async (request: StartTaskRequest) => {
+    const finished = await executeTask(request);
+    if (!startupReady && finished && request.taskType !== "diagnose") {
+      await runStartupAudit(true);
     }
   });
 
@@ -488,6 +527,9 @@ function App() {
         const next = await invoke<AppStateSnapshot>(command, args);
         mergeShellSnapshot(next);
         await loadPageData(activePage, true);
+        if (!startupReady) {
+          await runStartupAudit(true);
+        }
 
         if (successText) {
           setToast(successText);
@@ -528,6 +570,9 @@ function App() {
         const next = await invoke<string>(command, args);
         setToast(successText || next);
         await refreshCurrentView(false);
+        if (!startupReady) {
+          await runStartupAudit(true);
+        }
       } catch (nextError) {
         setError(normalizeError(nextError));
       } finally {
@@ -535,6 +580,83 @@ function App() {
       }
     }
   );
+
+  const runStartupAudit = useEffectEvent(async (force = false) => {
+    setStartupChecking(true);
+    setError("");
+
+    try {
+      const checks = await invokeWithTimeout<StatusPageSnapshot>(
+        "load_status_page",
+        {},
+        PAGE_TIMEOUT_MS.status,
+        locale === "en-US" ? "Status checks timed out." : "状态检查加载超时。"
+      );
+      setStatusPage(checks);
+
+      const diagnosis = await executeTask({ taskType: "diagnose" });
+      if (diagnosis?.status === "failed") {
+        setStartupReady(false);
+        return;
+      }
+
+      const nextRepair = await invokeWithTimeout<RepairPageSnapshot>(
+        "load_repair_page",
+        {},
+        PAGE_TIMEOUT_MS.repair,
+        locale === "en-US" ? "Issue list loading timed out." : "问题列表加载超时。"
+      );
+      setRepairPage(nextRepair);
+      patchSnapshot((current) => ({
+        ...current,
+        overview: {
+          ...current.overview,
+          issueCount: nextRepair.issues.length,
+          repairableIssueCount: nextRepair.repairableIssueCount,
+          lastDiagnosisAt: nextRepair.lastDiagnosisAt
+        },
+        recentIssues: nextRepair.issues.slice(0, 4)
+      }));
+
+      if (force || !messagingPage) {
+        const nextMessaging = await invokeWithTimeout<MessagingPageSnapshot>(
+          "load_messaging_page",
+          {},
+          PAGE_TIMEOUT_MS.channels,
+          locale === "en-US" ? "Messaging settings loading timed out." : "消息渠道配置加载超时。"
+        );
+        setMessagingPage(nextMessaging);
+      }
+
+      const nextSnapshot = await invokeWithTimeout<AppStateSnapshot>(
+        "hydrate_app_state",
+        {},
+        3600,
+        locale === "en-US"
+          ? "State synchronization timed out. Please try again."
+          : "状态同步超时，请稍后重试。"
+      );
+      mergeShellSnapshot(nextSnapshot);
+
+      const gate = resolveStartupGate(nextSnapshot, nextRepair.issues);
+      setStartupReady(gate.ready);
+      if (!gate.ready) {
+        setStartupPage((current) => {
+          if (!startupPageAutoModeRef.current) {
+            return current;
+          }
+          return gate.page;
+        });
+      } else {
+        startupPageAutoModeRef.current = true;
+      }
+    } catch (nextError) {
+      setStartupReady(false);
+      setError(normalizeError(nextError));
+    } finally {
+      setStartupChecking(false);
+    }
+  });
 
   const loadMessages = useEffectEvent(async (sessionId: string, force = false) => {
     if (!sessionId) {
@@ -585,9 +707,59 @@ function App() {
     return pending;
   });
 
+  const openSurfacePage = useEffectEvent(async (page: PageId | StartupPageId) => {
+    if (!startupReady) {
+      startupPageAutoModeRef.current = false;
+      switch (page) {
+        case "models":
+        case "channels":
+        case "profiles":
+        case "settings":
+          setStartupPage(page);
+          await loadPageData(page);
+          return;
+        case "install":
+        case "status":
+        case "repair":
+          setStartupPage(page);
+          return;
+        default:
+          return;
+      }
+    }
+
+    switch (page) {
+      case "overview":
+      case "models":
+      case "channels":
+      case "history":
+      case "profiles":
+      case "settings":
+        setActivePage(page);
+        await loadPageData(page);
+        return;
+      default:
+        return;
+    }
+  });
+
+  const handleStartupPageChange = useEffectEvent((page: StartupPageId) => {
+    startupPageAutoModeRef.current = false;
+    setStartupPage(page);
+  });
+
   useEffect(() => {
     void loadInitialState();
   }, []);
+
+  useEffect(() => {
+    if (!snapshot || startupBootstrappedRef.current) {
+      return;
+    }
+
+    startupBootstrappedRef.current = true;
+    void runStartupAudit(true);
+  }, [runStartupAudit, snapshot]);
 
   useEffect(() => {
     let active = true;
@@ -612,6 +784,12 @@ function App() {
   useEffect(() => {
     void loadPageData(activePage);
   }, [activePage]);
+
+  useEffect(() => {
+    if (!startupReady) {
+      void loadPageData(startupPage);
+    }
+  }, [startupPage, startupReady]);
 
   useEffect(() => {
     if (!toast) {
@@ -651,6 +829,17 @@ function App() {
     setSelectedModelId(nextModel.id);
     setModelDraft(modelToDraft(nextModel));
   }, [modelConfigs, selectedModelId]);
+
+  useEffect(() => {
+    if (!messagingPage) {
+      setMessagingDraft(EMPTY_MESSAGING_SETTINGS);
+      setMessagingChannelsText("");
+      return;
+    }
+
+    setMessagingDraft(messagingPage.settings);
+    setMessagingChannelsText(messagingPage.settings.discordFreeResponseChannels.join("\n"));
+  }, [messagingPage]);
 
   useEffect(() => {
     if (!identities.length) {
@@ -749,6 +938,9 @@ function App() {
           launchAtStartup: input.launchAtStartup
         }
       }));
+      if (!startupReady) {
+        await runStartupAudit(true);
+      }
       setToast(copy.save);
     } catch (nextError) {
       setError(normalizeError(nextError));
@@ -773,6 +965,42 @@ function App() {
       copy.create
     );
     setNewIdentityName("");
+  };
+
+  const handleSaveMessaging = async () => {
+    const input: MessagingSettingsInput = {
+      ...messagingDraft,
+      messagingCwd: messagingDraft.messagingCwd.trim(),
+      discordFreeResponseChannels: messagingChannelsText
+        .split(/\r?\n|,/)
+        .map((value) => value.trim())
+        .filter(Boolean)
+    };
+
+    setBusyKey("save-messaging");
+    setError("");
+
+    try {
+      const next = await invoke<AppStateSnapshot>("save_messaging_settings", { input });
+      mergeShellSnapshot(next);
+      const nextMessaging = await invokeWithTimeout<MessagingPageSnapshot>(
+        "load_messaging_page",
+        {},
+        PAGE_TIMEOUT_MS.channels,
+        locale === "en-US" ? "Messaging settings loading timed out." : "消息渠道配置加载超时。"
+      );
+      setMessagingPage(nextMessaging);
+      if (!startupReady) {
+        await runStartupAudit(true);
+      } else {
+        await loadPageData("channels", true);
+      }
+      setToast(copy.save);
+    } catch (nextError) {
+      setError(normalizeError(nextError));
+    } finally {
+      setBusyKey("");
+    }
   };
 
   const handleSwitchIdentity = async (identityName: string) => {
@@ -876,7 +1104,7 @@ function App() {
         break;
       case "model_configured":
       case "provider_key_configured":
-        setActivePage("models");
+        void openSurfacePage("models");
         break;
       case "gateway_available":
         void runTask({ taskType: "restart_gateway" });
@@ -894,9 +1122,91 @@ function App() {
     }
 
     if (issue.targetPage) {
-      setActivePage(issue.targetPage);
+      void openSurfacePage(issue.targetPage);
     }
   };
+
+  if (!startupReady) {
+    return (
+      <StartupGateScreen
+        activePage={startupPage}
+        archivePath={identityArchivePath}
+        busyKey={busyKey}
+        checkingOfficialUpdate={checkingOfficialUpdate}
+        checks={statusPage?.checks ?? EMPTY_STATUS_CHECKS}
+        channelsText={messagingChannelsText}
+        copy={copy}
+        error={error}
+        exportPath={identityExportPath}
+        historySessions={visibleSessions}
+        identities={identities}
+        importModelId={identityImportModelId}
+        importName={identityImportName}
+        issues={repairPage?.issues ?? EMPTY_ISSUES}
+        loading={startupChecking}
+        locale={locale}
+        messagingError={pageErrors.channels ?? ""}
+        messagingLoading={Boolean(pageLoading.channels)}
+        messagingSettings={messagingDraft}
+        modelConfigs={modelConfigs}
+        modelDraft={modelDraft}
+        newIdentityModelId={newIdentityModelId}
+        newIdentityName={newIdentityName}
+        officialUpdate={officialUpdate}
+        onActivateModel={handleActivateModel}
+        onBindIdentityModel={handleBindIdentityModel}
+        onChannelsTextChange={setMessagingChannelsText}
+        onCheckAction={handleCheckAction}
+        onCheckUpdate={() => void checkOfficialUpdate()}
+        onCreateIdentity={() => void handleCreateIdentity()}
+        onDeleteIdentity={() => void handleDeleteIdentity()}
+        onDeleteModel={handleDeleteModel}
+        onDiagnose={() => void runStartupAudit(true)}
+        onDraftChange={setModelDraft}
+        onExportIdentity={() => void handleExportIdentity()}
+        onGoToPage={handleStartupPageChange}
+        onImportIdentity={() => void handleImportIdentity()}
+        onIssueAction={handleIssueAction}
+        onNewModel={() => {
+          setSelectedModelId("");
+          setModelDraft(BLANK_MODEL);
+        }}
+        onRefresh={() => void runStartupAudit(true)}
+        onRenameIdentity={() => void handleRenameIdentity()}
+        onRunTask={runTask}
+        onSaveMessaging={() => void handleSaveMessaging()}
+        onSaveModel={() => void handleSaveModel()}
+        onSaveSettings={() => void handleSaveSettings()}
+        onSettingsChange={setMessagingDraft}
+        onSwitchIdentity={handleSwitchIdentity}
+        profileModelConfigs={profileModelConfigs}
+        revealApiKey={revealApiKey}
+        renameTo={renameIdentityTo}
+        selectedIdentity={selectedIdentity}
+        selectedIdentityMeta={selectedIdentityMeta}
+        selectedModelId={selectedModelId}
+        sessionError={sessionError}
+        sessionLoading={sessionLoading}
+        sessionMessages={sessionMessages}
+        setArchivePath={setIdentityArchivePath}
+        setExportPath={setIdentityExportPath}
+        setIdentityImportModelId={setIdentityImportModelId}
+        setIdentityImportName={setIdentityImportName}
+        setNewIdentityModelId={setNewIdentityModelId}
+        setNewIdentityName={setNewIdentityName}
+        setRenameTo={setRenameIdentityTo}
+        setRevealApiKey={setRevealApiKey}
+        setSelectedIdentity={setSelectedIdentity}
+        setSelectedModelId={setSelectedModelId}
+        setSettingsDraft={setSettingsDraft}
+        settingsDraft={settingsDraft}
+        snapshot={view}
+        task={task}
+        taskDetailsOpen={taskDetailsOpen}
+        toggleTaskDetails={() => setTaskDetailsOpen((current) => !current)}
+      />
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -910,7 +1220,7 @@ function App() {
         </div>
 
         <nav className="nav-list" aria-label="Primary">
-          {PAGE_ORDER.slice(0, -1).map((page) => (
+          {PRIMARY_PAGE_ORDER.filter((page) => page !== "settings").map((page) => (
             <button
               key={page}
               className={page === activePage ? "nav-item active" : "nav-item"}
@@ -969,63 +1279,13 @@ function App() {
         ) : null}
         {toast ? <div className="banner banner-toast">{toast}</div> : null}
 
-        <section className={task ? "task-panel" : "task-panel task-panel-idle"}>
-          <div className="section-head">
-            <h3>{copy.currentTask}</h3>
-            <div className="inline-actions">
-              {task ? (
-                <button
-                  className="ghost-button task-toggle-button"
-                  onClick={() => setTaskDetailsOpen((current) => !current)}
-                  type="button"
-                >
-                  {taskDetailsOpen
-                    ? locale === "en-US"
-                      ? "Hide Steps"
-                      : "隐藏步骤"
-                    : locale === "en-US"
-                      ? `Steps ${task.steps.filter((step) => step.status !== "pending").length}/${task.steps.length}`
-                      : "查看步骤"}
-                </button>
-              ) : null}
-              <span className={`pill ${task ? taskStatusClass(task.status) : "info"}`}>
-                {task ? renderTaskStatus(task.status, locale) : copy.noTask}
-              </span>
-            </div>
-          </div>
-
-          {task ? (
-            <div className="task-body">
-              <div className="task-meta">
-                <strong>{renderTaskHeadline(task, locale)}</strong>
-                <span>{Math.max(0, Math.min(100, task.percent))}%</span>
-              </div>
-              <div className="progress-track">
-                <span style={{ width: `${Math.max(6, task.percent)}%` }} />
-              </div>
-              <small className="task-caption">
-                {task.finishedAt
-                  ? `${locale === "en-US" ? "Finished" : "完成于"} ${formatDate(task.finishedAt)}`
-                  : `${locale === "en-US" ? "Started" : "开始于"} ${formatDate(task.startedAt)}`}
-              </small>
-              {taskDetailsOpen ? (
-                <div className="task-steps">
-                  {task.steps.map((step) => (
-                    <div key={step.id} className="task-step">
-                      <span className={`step-dot ${step.status}`} />
-                      <div>
-                        <strong>{renderTaskStepLabel(task.taskType, step.id, step.label, locale)}</strong>
-                        {step.detail ? <p>{renderTaskStepDetail(step.detail, locale)}</p> : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <p className="empty-note">{copy.noTask}</p>
-          )}
-        </section>
+        <TaskPanel
+          copy={copy}
+          locale={locale}
+          task={task}
+          taskDetailsOpen={taskDetailsOpen}
+          toggleTaskDetails={() => setTaskDetailsOpen((current) => !current)}
+        />
 
         <section className="workspace-scroll">
           {activePage === "overview" ? (
@@ -1037,46 +1297,6 @@ function App() {
               onRunTask={runTask}
               onGoRepair={() => setActivePage("repair")}
               snapshot={view}
-            />
-          ) : null}
-
-          {activePage === "install" ? (
-            <InstallPage
-              busyKey={busyKey}
-              checkingOfficialUpdate={checkingOfficialUpdate}
-              copy={copy}
-              locale={locale}
-              officialUpdate={officialUpdate}
-              onCheckUpdate={() => void checkOfficialUpdate()}
-              onRunTask={runTask}
-              snapshot={view}
-            />
-          ) : null}
-
-          {activePage === "status" ? (
-            <StatusPage
-              checks={statusPage?.checks ?? EMPTY_STATUS_CHECKS}
-              copy={copy}
-              error={pageErrors.status ?? ""}
-              loading={Boolean(pageLoading.status)}
-              locale={locale}
-              onCheckAction={handleCheckAction}
-              onDiagnose={() => void runTask({ taskType: "diagnose" })}
-            />
-          ) : null}
-
-          {activePage === "repair" ? (
-            <RepairPage
-              busyKey={busyKey}
-              copy={copy}
-              error={pageErrors.repair ?? ""}
-              issues={repairPage?.issues ?? EMPTY_ISSUES}
-              loading={Boolean(pageLoading.repair)}
-              locale={locale}
-              onDiagnose={() => void runTask({ taskType: "diagnose" })}
-              onIssueAction={handleIssueAction}
-              onRepairAll={() => void runTask({ taskType: "repair_all" })}
-              repairAllEnabled={(repairPage?.repairableIssueCount ?? view.overview.repairableIssueCount) > 0}
             />
           ) : null}
 
@@ -1101,6 +1321,21 @@ function App() {
               selectedModelId={selectedModelId}
               setRevealApiKey={setRevealApiKey}
               setSelectedModelId={setSelectedModelId}
+            />
+          ) : null}
+
+          {activePage === "channels" ? (
+            <MessagingPage
+              busyKey={busyKey}
+              channelsText={messagingChannelsText}
+              copy={copy}
+              error={pageErrors.channels ?? ""}
+              loading={Boolean(pageLoading.channels)}
+              locale={locale}
+              onChannelsTextChange={setMessagingChannelsText}
+              onSave={() => void handleSaveMessaging()}
+              onSettingsChange={setMessagingDraft}
+              settings={messagingDraft}
             />
           ) : null}
 
@@ -1217,13 +1452,6 @@ function OverviewPage({
     }
   ];
 
-  const quickActions = [
-    { id: "install_official", label: copy.quickInstall, tone: "primary" as const },
-    { id: "diagnose", label: copy.quickDiagnose, tone: "ghost" as const },
-    { id: "repair_all", label: copy.quickRepair, tone: "primary" as const },
-    { id: "restart_gateway", label: copy.quickGateway, tone: "ghost" as const }
-  ];
-
   return (
     <div className="page-stack">
       <section className="glass-panel overview-panel">
@@ -1234,17 +1462,14 @@ function OverviewPage({
             <p>{renderOverviewGatewaySummary(snapshot, locale)}</p>
           </div>
           <div className="toolbar-actions">
-            {quickActions.map((action) => (
-              <button
-                key={action.id}
-                className={action.tone === "primary" ? "primary-button" : "ghost-button"}
-                disabled={busyKey === action.id}
-                onClick={() => onRunTask({ taskType: action.id })}
-                type="button"
-              >
-                {action.label}
-              </button>
-            ))}
+            <button
+              className="ghost-button"
+              disabled={busyKey === "restart_gateway"}
+              onClick={() => onRunTask({ taskType: "restart_gateway" })}
+              type="button"
+            >
+              {copy.quickGateway}
+            </button>
             <button className="ghost-button" onClick={onOpenHistory} type="button">
               {copy.openHistory}
             </button>
@@ -1265,9 +1490,9 @@ function OverviewPage({
         <article className="glass-panel">
           <div className="section-head">
             <h3>{copy.lastDiagnosis}</h3>
-            <span className="pill info">
-              {snapshot.overview.lastDiagnosisAt || copy.runDiagnoseHint}
-            </span>
+            {overviewDiagnosisLabel(snapshot.overview.lastDiagnosisAt) ? (
+              <span className="pill info">{overviewDiagnosisLabel(snapshot.overview.lastDiagnosisAt)}</span>
+            ) : null}
           </div>
 
           {snapshot.recentIssues.length ? (
@@ -1314,6 +1539,477 @@ function OverviewPage({
           </div>
         </article>
       </section>
+    </div>
+  );
+}
+
+function TaskPanel({
+  copy,
+  locale,
+  task,
+  taskDetailsOpen,
+  toggleTaskDetails
+}: {
+  copy: ReturnType<typeof getCopy>;
+  locale: LocaleCode;
+  task: TaskProgress | null;
+  taskDetailsOpen: boolean;
+  toggleTaskDetails: () => void;
+}) {
+  return (
+    <section className={task ? "task-panel" : "task-panel task-panel-idle"}>
+      <div className="section-head">
+        <h3>{copy.currentTask}</h3>
+        <div className="inline-actions">
+          {task ? (
+            <button className="ghost-button task-toggle-button" onClick={toggleTaskDetails} type="button">
+              {taskDetailsOpen
+                ? locale === "en-US"
+                  ? "Hide Steps"
+                  : "隐藏步骤"
+                : locale === "en-US"
+                  ? `Steps ${task.steps.filter((step) => step.status !== "pending").length}/${task.steps.length}`
+                  : "查看步骤"}
+            </button>
+          ) : null}
+          <span className={`pill ${task ? taskStatusClass(task.status) : "info"}`}>
+            {task ? renderTaskStatus(task.status, locale) : copy.noTask}
+          </span>
+        </div>
+      </div>
+
+      {task ? (
+        <div className="task-body">
+          <div className="task-meta">
+            <strong>{renderTaskHeadline(task, locale)}</strong>
+            <span>{Math.max(0, Math.min(100, task.percent))}%</span>
+          </div>
+          <div className="progress-track">
+            <span style={{ width: `${Math.max(6, task.percent)}%` }} />
+          </div>
+          <small className="task-caption">
+            {task.finishedAt
+              ? `${locale === "en-US" ? "Finished" : "完成于"} ${formatDate(task.finishedAt)}`
+              : `${locale === "en-US" ? "Started" : "开始于"} ${formatDate(task.startedAt)}`}
+          </small>
+          {taskDetailsOpen ? (
+            <div className="task-steps">
+              {task.steps.map((step) => (
+                <div key={step.id} className="task-step">
+                  <span className={`step-dot ${step.status}`} />
+                  <div>
+                    <strong>{renderTaskStepLabel(task.taskType, step.id, step.label, locale)}</strong>
+                    {step.detail ? <p>{renderTaskStepDetail(step.detail, locale)}</p> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="empty-note">{copy.noTask}</p>
+      )}
+    </section>
+  );
+}
+
+function StartupGateScreen({
+  activePage,
+  archivePath,
+  busyKey,
+  checkingOfficialUpdate,
+  checks,
+  channelsText,
+  copy,
+  error,
+  exportPath,
+  historySessions,
+  identities,
+  importModelId,
+  importName,
+  issues,
+  loading,
+  locale,
+  messagingError,
+  messagingLoading,
+  messagingSettings,
+  modelConfigs,
+  modelDraft,
+  newIdentityModelId,
+  newIdentityName,
+  officialUpdate,
+  onActivateModel,
+  onBindIdentityModel,
+  onChannelsTextChange,
+  onCheckAction,
+  onCheckUpdate,
+  onCreateIdentity,
+  onDeleteIdentity,
+  onDeleteModel,
+  onDiagnose,
+  onDraftChange,
+  onExportIdentity,
+  onGoToPage,
+  onImportIdentity,
+  onIssueAction,
+  onNewModel,
+  onRefresh,
+  onRenameIdentity,
+  onRunTask,
+  onSaveMessaging,
+  onSaveModel,
+  onSaveSettings,
+  onSettingsChange,
+  onSwitchIdentity,
+  profileModelConfigs,
+  revealApiKey,
+  renameTo,
+  selectedIdentity,
+  selectedIdentityMeta,
+  selectedModelId,
+  sessionError,
+  sessionLoading,
+  sessionMessages,
+  setArchivePath,
+  setExportPath,
+  setIdentityImportModelId,
+  setIdentityImportName,
+  setNewIdentityModelId,
+  setNewIdentityName,
+  setRenameTo,
+  setRevealApiKey,
+  setSelectedIdentity,
+  setSelectedModelId,
+  setSettingsDraft,
+  settingsDraft,
+  snapshot,
+  task,
+  taskDetailsOpen,
+  toggleTaskDetails
+}: {
+  activePage: StartupPageId;
+  archivePath: string;
+  busyKey: string;
+  checkingOfficialUpdate: boolean;
+  checks: StatusCheck[];
+  channelsText: string;
+  copy: ReturnType<typeof getCopy>;
+  error: string;
+  exportPath: string;
+  historySessions: SessionSummary[];
+  identities: IdentitySummary[];
+  importModelId: string;
+  importName: string;
+  issues: IssueItem[];
+  loading: boolean;
+  locale: LocaleCode;
+  messagingError: string;
+  messagingLoading: boolean;
+  messagingSettings: MessagingSettingsInput;
+  modelConfigs: ModelConfig[];
+  modelDraft: ModelConfigInput;
+  newIdentityModelId: string;
+  newIdentityName: string;
+  officialUpdate: OfficialUpdateSnapshot | null;
+  onActivateModel: (modelId: string) => void;
+  onBindIdentityModel: (identity: IdentitySummary, modelId: string) => void;
+  onChannelsTextChange: (value: string) => void;
+  onCheckAction: (check: StatusCheck) => void;
+  onCheckUpdate: () => void;
+  onCreateIdentity: () => void;
+  onDeleteIdentity: () => void;
+  onDeleteModel: (model: ModelConfig) => void;
+  onDiagnose: () => void;
+  onDraftChange: (value: ModelConfigInput) => void;
+  onExportIdentity: () => void;
+  onGoToPage: (page: StartupPageId) => void;
+  onImportIdentity: () => void;
+  onIssueAction: (issue: IssueItem) => void;
+  onNewModel: () => void;
+  onRefresh: () => void;
+  onRenameIdentity: () => void;
+  onRunTask: (request: StartTaskRequest) => void;
+  onSaveMessaging: () => void;
+  onSaveModel: () => void;
+  onSaveSettings: () => void;
+  onSettingsChange: (value: MessagingSettingsInput) => void;
+  onSwitchIdentity: (identityName: string) => void;
+  profileModelConfigs: ModelConfig[];
+  revealApiKey: boolean;
+  renameTo: string;
+  selectedIdentity: string;
+  selectedIdentityMeta: IdentitySummary | null;
+  selectedModelId: string;
+  sessionError: string;
+  sessionLoading: boolean;
+  sessionMessages: SessionMessage[];
+  setArchivePath: (value: string) => void;
+  setExportPath: (value: string) => void;
+  setIdentityImportModelId: (value: string) => void;
+  setIdentityImportName: (value: string) => void;
+  setNewIdentityModelId: (value: string) => void;
+  setNewIdentityName: (value: string) => void;
+  setRenameTo: (value: string) => void;
+  setRevealApiKey: (value: boolean) => void;
+  setSelectedIdentity: (value: string) => void;
+  setSelectedModelId: (value: string) => void;
+  setSettingsDraft: (value: PanelSettingsInput) => void;
+  settingsDraft: PanelSettingsInput;
+  snapshot: AppStateSnapshot;
+  task: TaskProgress | null;
+  taskDetailsOpen: boolean;
+  toggleTaskDetails: () => void;
+}) {
+  const bootPages: StartupPageId[] = [
+    "install",
+    "status",
+    "repair",
+    "models",
+    "channels",
+    "profiles",
+    "settings"
+  ];
+
+  const selectedSession = historySessions[0] ?? null;
+
+  return (
+    <div className="startup-shell">
+      <section className="startup-hero glass-panel">
+        <div className="section-head section-head-wrap">
+          <div className="hero-copy startup-hero-copy">
+            <small>{locale === "en-US" ? "Startup Check" : "启动检查"}</small>
+            <h1>
+              {snapshot.overview.hermesInstalled
+                ? locale === "en-US"
+                  ? "Hermes needs to pass checks before entering the workspace"
+                  : "Hermes 通过启动检查后才能进入主界面"
+                : locale === "en-US"
+                  ? "Complete Hermes initialization before entering the workspace"
+                  : "请先完成 Hermes 安装初始化，再进入主界面"}
+            </h1>
+            <p>
+              {locale === "en-US"
+                ? "Install, diagnose and repair now. The main workspace unlocks only after Hermes is installed and no blocking issue remains."
+                : "安装初始化、状态检查和异常修复统一前置到启动阶段。只有 Hermes 已安装且无阻断问题时，才会进入软件主界面。"}
+            </p>
+          </div>
+          <div className="toolbar-actions">
+            <button className="ghost-button" disabled={loading} onClick={onRefresh} type="button">
+              {loading ? copy.loading : copy.refresh}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {error ? <div className="banner banner-error">{error}</div> : null}
+
+      <TaskPanel
+        copy={copy}
+        locale={locale}
+        task={task}
+        taskDetailsOpen={taskDetailsOpen}
+        toggleTaskDetails={toggleTaskDetails}
+      />
+
+      <div className="startup-layout">
+        <aside className="sidebar startup-sidebar">
+          <nav className="nav-list" aria-label="Startup">
+            {bootPages.map((page) => (
+              <button
+                key={page}
+                className={page === activePage ? "nav-item active" : "nav-item"}
+                onClick={() => onGoToPage(page)}
+                type="button"
+              >
+                <span>{copy.nav[page]}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="startup-summary">
+            <div className="sidebar-mini">
+              <small>{copy.hermesInstalled}</small>
+              <strong className={snapshot.overview.hermesInstalled ? "tone-ok" : "tone-error"}>
+                {snapshot.overview.hermesInstalled ? copy.active : copy.inactive}
+              </strong>
+            </div>
+            <div className="sidebar-mini">
+              <small>{locale === "en-US" ? "Blocking Issues" : "阻断问题"}</small>
+              <strong>{issues.length}</strong>
+            </div>
+          </div>
+        </aside>
+
+        <main className="workspace startup-workspace">
+          <header className="workspace-head">
+            <div>
+              <h2>{copy.nav[activePage]}</h2>
+              <p>{describeStartupPage(activePage, locale)}</p>
+            </div>
+          </header>
+
+          <section className="workspace-scroll">
+            {activePage === "install" ? (
+              <InstallPage
+                busyKey={busyKey}
+                checkingOfficialUpdate={checkingOfficialUpdate}
+                copy={copy}
+                locale={locale}
+                officialUpdate={officialUpdate}
+                onCheckUpdate={onCheckUpdate}
+                onRunTask={onRunTask}
+                snapshot={snapshot}
+              />
+            ) : null}
+
+            {activePage === "status" ? (
+              <StatusPage
+                checks={checks}
+                copy={copy}
+                error=""
+                loading={loading}
+                locale={locale}
+                onCheckAction={onCheckAction}
+                onDiagnose={onDiagnose}
+              />
+            ) : null}
+
+            {activePage === "repair" ? (
+              <RepairPage
+                busyKey={busyKey}
+                copy={copy}
+                error=""
+                issues={issues}
+                loading={loading}
+                locale={locale}
+                onDiagnose={onDiagnose}
+                onIssueAction={(issue) => {
+                  if (!issue.repairable && issue.targetPage) {
+                    onGoToPage(startupPageForTarget(issue.targetPage));
+                    return;
+                  }
+                  onIssueAction(issue);
+                }}
+                onRepairAll={() => onRunTask({ taskType: "repair_all" })}
+                repairAllEnabled={issues.some((issue) => issue.repairable)}
+              />
+            ) : null}
+
+            {activePage === "models" ? (
+              <ModelsPage
+                busyKey={busyKey}
+                copy={copy}
+                draft={modelDraft}
+                error=""
+                loading={false}
+                locale={locale}
+                models={modelConfigs}
+                onActivate={onActivateModel}
+                onDelete={onDeleteModel}
+                onDraftChange={onDraftChange}
+                onNew={onNewModel}
+                onSave={onSaveModel}
+                revealApiKey={revealApiKey}
+                selectedModelId={selectedModelId}
+                setRevealApiKey={setRevealApiKey}
+                setSelectedModelId={setSelectedModelId}
+              />
+            ) : null}
+
+            {activePage === "channels" ? (
+              <MessagingPage
+                busyKey={busyKey}
+                channelsText={channelsText}
+                copy={copy}
+                error={messagingError}
+                loading={messagingLoading}
+                locale={locale}
+                onChannelsTextChange={onChannelsTextChange}
+                onSave={onSaveMessaging}
+                onSettingsChange={onSettingsChange}
+                settings={messagingSettings}
+              />
+            ) : null}
+
+            {activePage === "profiles" ? (
+              <ProfilesPage
+                archivePath={archivePath}
+                busyKey={busyKey}
+                copy={copy}
+                currentIdentity={identities.find((identity) => identity.current) ?? null}
+                error=""
+                exportPath={exportPath}
+                identities={identities}
+                importModelId={importModelId}
+                importName={importName}
+                loading={false}
+                locale={locale}
+                modelConfigs={profileModelConfigs}
+                newIdentityModelId={newIdentityModelId}
+                newIdentityName={newIdentityName}
+                onBindModel={onBindIdentityModel}
+                onCreate={onCreateIdentity}
+                onDelete={onDeleteIdentity}
+                onExport={onExportIdentity}
+                onImport={onImportIdentity}
+                onRename={onRenameIdentity}
+                onSwitch={onSwitchIdentity}
+                renameTo={renameTo}
+                selectedIdentity={selectedIdentity}
+                selectedIdentityMeta={selectedIdentityMeta}
+                setArchivePath={setArchivePath}
+                setExportPath={setExportPath}
+                setIdentityImportModelId={setIdentityImportModelId}
+                setIdentityImportName={setIdentityImportName}
+                setNewIdentityModelId={setNewIdentityModelId}
+                setNewIdentityName={setNewIdentityName}
+                setRenameTo={setRenameTo}
+                setSelectedIdentity={setSelectedIdentity}
+              />
+            ) : null}
+
+            {activePage === "settings" ? (
+              <SettingsPage
+                busyKey={busyKey}
+                copy={copy}
+                locale={locale}
+                onRunTask={onRunTask}
+                onSaveSettings={onSaveSettings}
+                setSettingsDraft={setSettingsDraft}
+                settingsDraft={settingsDraft}
+                snapshot={snapshot}
+              />
+            ) : null}
+
+            {activePage === "status" && selectedSession ? (
+              <section className="glass-panel startup-history-note">
+                <div className="section-head">
+                  <h3>{copy.sessionHistory}</h3>
+                  <span className="pill info">{historySessions.length}</span>
+                </div>
+                {sessionError ? <div className="banner banner-error">{sessionError}</div> : null}
+                <p className="section-description">
+                  {locale === "en-US"
+                    ? "History is available after startup finishes. The latest session preview is kept here for quick context."
+                    : "会话历史会在启动完成后进入主界面，这里保留最近会话的快速预览。"}
+                </p>
+                <div className="meta-list">
+                  <MetaRow label={locale === "en-US" ? "Latest Session" : "最近会话"} value={selectedSession.title || selectedSession.id} />
+                  <MetaRow label={locale === "en-US" ? "Last Active" : "最近活跃"} value={formatDate(selectedSession.lastActive || selectedSession.startedAt)} />
+                  <MetaRow
+                    label={locale === "en-US" ? "Messages" : "消息数"}
+                    value={sessionLoading ? copy.loading : String(selectedSession.messageCount)}
+                  />
+                  <MetaRow
+                    label={locale === "en-US" ? "Preview" : "预览"}
+                    value={sessionMessages[0]?.content || selectedSession.preview || "-"}
+                  />
+                </div>
+              </section>
+            ) : null}
+          </section>
+        </main>
+      </div>
     </div>
   );
 }
@@ -1794,6 +2490,173 @@ function ModelsPage({
             </>
           ) : null}
         </div>
+      </section>
+    </div>
+  );
+}
+
+function MessagingPage({
+  busyKey,
+  channelsText,
+  copy,
+  error,
+  loading,
+  locale,
+  onChannelsTextChange,
+  onSave,
+  onSettingsChange,
+  settings
+}: {
+  busyKey: string;
+  channelsText: string;
+  copy: ReturnType<typeof getCopy>;
+  error: string;
+  loading: boolean;
+  locale: LocaleCode;
+  onChannelsTextChange: (value: string) => void;
+  onSave: () => void;
+  onSettingsChange: (value: MessagingSettingsInput) => void;
+  settings: MessagingSettingsInput;
+}) {
+  return (
+    <div className="page-stack">
+      <section className="glass-panel settings-grid messaging-grid">
+        <article className="glass-panel settings-panel">
+          <div className="section-head">
+            <h3>{copy.channels}</h3>
+          </div>
+          <p className="section-description">
+            {locale === "en-US"
+              ? "Manage Hermes IM working directory and Discord channel behavior from one place."
+              : "集中管理 Hermes IM 工作目录，以及 Discord 消息渠道的响应行为。"}
+          </p>
+
+          {error ? <div className="banner banner-error">{error}</div> : null}
+          {!error && loading ? <p className="empty-note">{copy.loading}</p> : null}
+
+          <div className="form-grid messaging-form-grid">
+            <label className="field field-wide">
+              <span>{copy.messagingWorkingDir}</span>
+              <input
+                onChange={(event) =>
+                  onSettingsChange({ ...settings, messagingCwd: event.target.value })
+                }
+                placeholder={
+                  locale === "en-US" ? "Optional working directory for messaging runtime" : "可选：消息运行时工作目录"
+                }
+                value={settings.messagingCwd}
+              />
+            </label>
+
+            <label className="field checkbox-field">
+              <div className="setting-copy">
+                <strong>{copy.groupSessionsPerUser}</strong>
+                <small>
+                  {locale === "en-US"
+                    ? "Split group conversations by user to avoid mixing contexts."
+                    : "群聊里按用户拆分会话，避免上下文混在一起。"}
+                </small>
+              </div>
+              <input
+                checked={settings.groupSessionsPerUser}
+                onChange={(event) =>
+                  onSettingsChange({
+                    ...settings,
+                    groupSessionsPerUser: event.target.checked
+                  })
+                }
+                type="checkbox"
+              />
+            </label>
+
+            <label className="field checkbox-field">
+              <div className="setting-copy">
+                <strong>{copy.discordRequireMention}</strong>
+                <small>
+                  {locale === "en-US"
+                    ? "Only respond in Discord when Hermes is explicitly mentioned."
+                    : "Discord 中仅在明确提及 Hermes 时响应。"}
+                </small>
+              </div>
+              <input
+                checked={settings.discordRequireMention}
+                onChange={(event) =>
+                  onSettingsChange({
+                    ...settings,
+                    discordRequireMention: event.target.checked
+                  })
+                }
+                type="checkbox"
+              />
+            </label>
+
+            <label className="field checkbox-field">
+              <div className="setting-copy">
+                <strong>{copy.discordAutoThread}</strong>
+                <small>
+                  {locale === "en-US"
+                    ? "Create or continue Discord threads automatically for responses."
+                    : "在 Discord 中自动创建或续用线程回复。"}
+                </small>
+              </div>
+              <input
+                checked={settings.discordAutoThread}
+                onChange={(event) =>
+                  onSettingsChange({
+                    ...settings,
+                    discordAutoThread: event.target.checked
+                  })
+                }
+                type="checkbox"
+              />
+            </label>
+
+            <label className="field field-wide">
+              <span>{copy.discordFreeResponseChannels}</span>
+              <textarea
+                className="channels-textarea"
+                onChange={(event) => onChannelsTextChange(event.target.value)}
+                placeholder={
+                  locale === "en-US"
+                    ? "One Discord channel per line, for example:\ngeneral\nops-room"
+                    : "每行一个 Discord 频道，例如：\ngeneral\nops-room"
+                }
+                value={channelsText}
+              />
+            </label>
+          </div>
+
+          <div className="form-actions">
+            <button className="primary-button" disabled={busyKey === "save-messaging"} onClick={onSave} type="button">
+              {copy.save}
+            </button>
+          </div>
+        </article>
+
+        <article className="glass-panel">
+          <div className="section-head">
+            <h3>{locale === "en-US" ? "Current Preview" : "当前配置预览"}</h3>
+          </div>
+          <div className="meta-list">
+            <MetaRow label={copy.messagingWorkingDir} value={settings.messagingCwd || "-"} />
+            <MetaRow
+              label={copy.groupSessionsPerUser}
+              value={settings.groupSessionsPerUser ? copy.active : copy.inactive}
+            />
+            <MetaRow
+              label={copy.discordRequireMention}
+              value={settings.discordRequireMention ? copy.active : copy.inactive}
+            />
+            <MetaRow
+              label={copy.discordAutoThread}
+              value={settings.discordAutoThread ? copy.active : copy.inactive}
+            />
+            <MetaRow
+              label={copy.discordFreeResponseChannels}
+              value={channelsText.trim() || "-"}
+            />
+          </div>
+        </article>
       </section>
     </div>
   );
@@ -2509,6 +3372,7 @@ function describePage(page: PageId, locale: LocaleCode) {
     status: "将 Hermes 核心运行条件拆成可检查、可重扫的问题项。",
     repair: "集中展示异常列表、建议与一键批量修复入口。",
     models: "通过表单管理 Provider、模型、Key 和 URL，不暴露配置文件。",
+    channels: "管理 Hermes IM 工作目录和 Discord 消息渠道行为。",
     history: "只读查看 Hermes 已有会话历史和消息内容。",
     profiles: "管理身份、切换当前身份并绑定对应模型配置。",
     settings: "管理自启动、语言、版本信息和卸载入口。"
@@ -2520,12 +3384,17 @@ function describePage(page: PageId, locale: LocaleCode) {
     status: "Break Hermes runtime prerequisites into explicit checks and rescans.",
     repair: "Show issue list, suggestions and batch repair entry in one place.",
     models: "Manage provider, model, key and URL from forms instead of raw files.",
+    channels: "Manage Hermes IM working directory and Discord channel behavior.",
     history: "Read existing Hermes sessions and transcript history in read-only mode.",
     profiles: "Manage identities, switch active identity and bind model configs.",
     settings: "Manage startup, language, version info and uninstall entries."
   };
 
   return locale === "en-US" ? en[page] : zh[page];
+}
+
+function describeStartupPage(page: StartupPageId, locale: LocaleCode) {
+  return describePage(page, locale);
 }
 
 function describeCheck(id: string, locale: LocaleCode) {

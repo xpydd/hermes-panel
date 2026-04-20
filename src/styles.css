@@ -153,6 +153,51 @@ pre {
   color: var(--muted);
 }
 
+.startup-shell {
+  width: 100%;
+  height: 100%;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.startup-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  gap: 12px;
+  flex: 1 1 auto;
+}
+
+.startup-sidebar {
+  padding: 14px;
+}
+
+.startup-workspace {
+  min-height: 0;
+}
+
+.startup-hero {
+  padding: 18px 20px;
+}
+
+.startup-hero-copy h1 {
+  margin-top: 6px;
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.startup-hero-copy p {
+  max-width: 860px;
+}
+
+.startup-summary {
+  margin-top: auto;
+  display: grid;
+  gap: 8px;
+}
+
 .app-shell {
   width: 100%;
   height: 100%;
@@ -588,6 +633,13 @@ pre {
   max-width: none;
 }
 
+.hero-copy,
+.hero-copy h3,
+.hero-copy p,
+.section-head h3 {
+  min-width: 0;
+}
+
 .stats-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -848,6 +900,24 @@ pre {
 
 .field-wide {
   grid-column: 1 / -1;
+}
+
+.channels-textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+
+.messaging-grid {
+  align-items: start;
+}
+
+.messaging-form-grid {
+  grid-template-columns: 1fr;
+}
+
+.startup-history-note .meta-row span {
+  max-width: 100%;
+  text-align: left;
 }
 
 .checkbox-field {
@@ -1141,6 +1211,16 @@ pre {
     padding: 8px;
   }
 
+  .startup-shell {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .startup-layout {
+    grid-template-columns: 172px minmax(0, 1fr);
+    gap: 8px;
+  }
+
   .sidebar,
   .workspace-head,
   .task-panel,
@@ -1243,7 +1323,8 @@ pre {
 
   .compact-stats-grid,
   .overview-grid,
-  .settings-grid {
+  .settings-grid,
+  .messaging-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

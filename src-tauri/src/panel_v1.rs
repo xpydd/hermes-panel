@@ -185,6 +185,13 @@ pub struct ProfilesPageSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MessagingPageSnapshot {
+    generated_at: String,
+    settings: MessagingSettingsSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HistoryPageSnapshot {
     generated_at: String,
     sessions: Vec<super::SessionSummary>,
@@ -234,6 +241,16 @@ struct IdentitySummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct MessagingSettingsSnapshot {
+    messaging_cwd: String,
+    group_sessions_per_user: bool,
+    discord_require_mention: bool,
+    discord_auto_thread: bool,
+    discord_free_response_channels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AboutInfo {
     app_version: String,
     platform: String,
@@ -260,6 +277,16 @@ pub struct ModelConfigInput {
 pub struct PanelSettingsInput {
     language: String,
     launch_at_startup: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagingSettingsInput {
+    messaging_cwd: String,
+    group_sessions_per_user: bool,
+    discord_require_mention: bool,
+    discord_auto_thread: bool,
+    discord_free_response_channels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -431,6 +458,32 @@ pub async fn load_profiles_page() -> Result<ProfilesPageSnapshot, String> {
             generated_at: super::now_string(),
             model_configs: build_model_summaries(&store),
             identities: build_identity_summaries(&dashboard, &store),
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn load_messaging_page() -> Result<MessagingPageSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let dashboard = super::build_dashboard_light()?;
+        Ok(MessagingPageSnapshot {
+            generated_at: super::now_string(),
+            settings: MessagingSettingsSnapshot {
+                messaging_cwd: dashboard.files.basic.messaging_cwd.clone(),
+                group_sessions_per_user: dashboard
+                    .files
+                    .basic
+                    .messaging_group_sessions_per_user,
+                discord_require_mention: dashboard.files.basic.discord_require_mention,
+                discord_auto_thread: dashboard.files.basic.discord_auto_thread,
+                discord_free_response_channels: dashboard
+                    .files
+                    .basic
+                    .discord_free_response_channels
+                    .clone(),
+            },
         })
     })
     .await
@@ -646,6 +699,67 @@ pub fn save_profile_model_binding(
     store.last_diagnosis = None;
     save_panel_store(&store)?;
     refresh_tray_menu(&app)?;
+    mutation_response(&app)
+}
+
+#[tauri::command]
+pub fn save_messaging_settings(
+    app: tauri::AppHandle,
+    input: MessagingSettingsInput,
+) -> Result<AppStateSnapshot, String> {
+    let config_path = super::hermes_home().join("config.yaml");
+    let env_path = super::hermes_home().join(".env");
+    let current_config_text =
+        fs::read_to_string(&config_path).unwrap_or_else(|_| super::default_config_template());
+    let current_env_text =
+        fs::read_to_string(&env_path).unwrap_or_else(|_| super::default_env_template());
+    let mut root = super::parse_yaml_or_mapping(&current_config_text)?;
+    let mut env_map = super::parse_env_map(&current_env_text);
+    let channels = input
+        .discord_free_response_channels
+        .into_iter()
+        .filter_map(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    super::update_yaml_bool(
+        &mut root,
+        &["messaging", "group_sessions_per_user"],
+        input.group_sessions_per_user,
+    );
+    super::update_yaml_bool(
+        &mut root,
+        &["messaging", "providers", "discord", "require_mention"],
+        input.discord_require_mention,
+    );
+    super::update_yaml_bool(
+        &mut root,
+        &["messaging", "providers", "discord", "auto_thread"],
+        input.discord_auto_thread,
+    );
+    super::update_yaml_string_list(
+        &mut root,
+        &[
+            "messaging",
+            "providers",
+            "discord",
+            "free_response_channels",
+        ],
+        &channels,
+    );
+    super::upsert_env(&mut env_map, "MESSAGING_CWD", &input.messaging_cwd);
+
+    super::ensure_parent(&config_path)?;
+    super::ensure_parent(&env_path)?;
+    fs::write(&config_path, super::yaml_to_string(&root)?).map_err(|error| error.to_string())?;
+    fs::write(&env_path, super::env_map_to_string(&env_map)).map_err(|error| error.to_string())?;
+    super::invalidate_dashboard_cache();
     mutation_response(&app)
 }
 

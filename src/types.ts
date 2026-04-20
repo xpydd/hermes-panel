@@ -6,6 +6,7 @@ export type PageId =
   | "status"
   | "repair"
   | "models"
+  | "channels"
   | "history"
   | "profiles"
   | "settings";
@@ -139,6 +140,19 @@ export type ProfilesPageSnapshot = {
   modelConfigs: ModelConfig[];
 };
 
+export type MessagingSettings = {
+  messagingCwd: string;
+  groupSessionsPerUser: boolean;
+  discordRequireMention: boolean;
+  discordAutoThread: boolean;
+  discordFreeResponseChannels: string[];
+};
+
+export type MessagingPageSnapshot = {
+  generatedAt: string;
+  settings: MessagingSettings;
+};
+
 export type HistoryPageSnapshot = {
   generatedAt: string;
   sessions: SessionSummary[];
@@ -182,6 +196,8 @@ export type PanelSettingsInput = {
   language: LocaleCode;
   launchAtStartup: boolean;
 };
+
+export type MessagingSettingsInput = MessagingSettings;
 
 export type OfficialUpdateSnapshot = {
   currentInstalled: boolean;

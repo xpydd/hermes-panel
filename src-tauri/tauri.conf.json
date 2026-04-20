@@ -35,6 +35,11 @@
   },
   "bundle": {
     "active": true,
+    "windows": {
+      "nsis": {
+        "template": "windows/installer-template.nsi"
+      }
+    },
     "targets": [
       "app",
       "dmg",
